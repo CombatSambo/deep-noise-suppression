@@ -13,3 +13,6 @@ __pycache__/
 *.ckpt
 .env
 AGENTS.md
+outputs/
+.tmp_out/
+dataset/
