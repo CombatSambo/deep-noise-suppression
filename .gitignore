@@ -1,0 +1,15 @@
+﻿dns_env/
+venv/
+.venv/
+env/
+output/
+checkpoints/
+runs/
+wandb/
+__pycache__/
+*.pyc
+*.pt
+*.pth
+*.ckpt
+.env
+AGENTS.md
