@@ -186,15 +186,21 @@ class Distorter:
             new_params["agc_gain_db"] = random.uniform(range_low, range_high) + 6.0
 
         # Bad mic response generation can if desired disable RIR, and requires addition parameter picking
-        if new_params.get("room_bad_mic_response") is not None and new_params["room_bad_mic_response"] == True:
+        if new_params.get("room_bad_mic_response") is True:
             if "allow_rir_and_generated" in distortion_sampling_params:
                 if not distortion_sampling_params["allow_rir_and_generated"]:
                     if new_params.get("room_mic_impulse_response_file") is not None:
                         del new_params["room_mic_impulse_response_file"]
-            bad_mic_params = distortion_sampling_params["room_bad_mic_params"]
-            peak_count = random.randint(*bad_mic_params["peak_count"])
-            for mic_param in bad_mic_params:
-                bad_mic_params[mic_param] = tuple([float(x) for x in bad_mic_params[mic_param]])
+
+            bad_mic_params_raw = distortion_sampling_params["room_bad_mic_params"]
+            bad_mic_params = {
+                key: tuple(float(x) for x in value)
+                for key, value in bad_mic_params_raw.items()
+            }
+
+            peak_count_low, peak_count_high = bad_mic_params["peak_count"]
+            peak_count = random.randint(int(peak_count_low), int(peak_count_high))
+
             new_params["room_bad_mic_params"] = {
                 "low_shelf_hz": random.uniform(*bad_mic_params["low_shelf_hz"]),
                 "low_shelf_db": random.uniform(*bad_mic_params["low_shelf_db"]),
@@ -203,6 +209,7 @@ class Distorter:
                 "peak_hz": [random.uniform(*bad_mic_params["peak_hz"]) for _ in range(peak_count)],
                 "peak_db": [random.uniform(*bad_mic_params["peak_db"]) for _ in range(peak_count)],
             }
+
         return new_params
 
     # @lru_cache(maxsize=500)
