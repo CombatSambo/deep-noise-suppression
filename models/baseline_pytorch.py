@@ -77,6 +77,5 @@ class BaselineGRUMaskNet(nn.Module):
         residual = x + out1
         out2, hn2 = self.gru2(residual, h02.contiguous())
         mask = torch.sigmoid(self.mask_proj(out2))
-        # ONNX graph has Clip(min=0) after Sigmoid; keep explicit for parity.
         mask = torch.clamp(mask, min=0.0)
         return mask, hn1, hn2
