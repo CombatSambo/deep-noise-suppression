@@ -115,7 +115,7 @@ onlinesynth_nearend_apply_gain_change: 0.2  # Probability to apply random gain c
 onlinesynth_nearend_normalize_volume: -27  # dB level for nearend / target volume normalization. Comment if no normalization is desired
 
 
-# Training data pipeline settings (Blocks 1-2)
+# Training data pipeline settings 
 train_data:
   segment_seconds: 1.0
   epoch_size: 1000

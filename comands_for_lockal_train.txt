@@ -1,0 +1,7 @@
+cd C:\Users\egorb\Downloads\NN\Project\nnp_track02.\dns_env\Scripts\Activate.ps1
+
+python train_baseline_pytorch.py --config synthesizer_config.yaml --epochs 10 --batch-size 8 --epoch-size 4000 --segment-seconds 1.0 --device cpu --save-dir checkpoints
+
+python enhance_pytorch.py --input latency_check --output-dir outputs\enhanced --checkpoint checkpoints\baseline_pytorch_last.pt --device cpu
+
+python evaluate_enhanced.py --input outputs\enhanced --metrics sigmos dnsmos --csv-out outputs\eval.csv --json-out outputs\eval.json
