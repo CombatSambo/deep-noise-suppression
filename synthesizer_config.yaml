@@ -124,6 +124,12 @@ train_data:
   random_gain_db_range: [-6, 6]
   recursive_scan: true
   file_extensions: [".wav", ".flac"]
+  split:
+    enabled: false
+    train_ratio: 0.8
+    val_ratio: 0.1
+    test_ratio: 0.1
+    seed: 0
 
 train_dataloader:
   batch_size: 4

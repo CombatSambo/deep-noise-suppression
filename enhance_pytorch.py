@@ -10,7 +10,7 @@ import numpy as np
 import soundfile as sf
 import torch
 
-from models.baseline_pytorch import BaselineGRUMaskNet
+from models.baseline_pytorch import create_mask_model
 
 
 @dataclass(frozen=True)
@@ -24,7 +24,7 @@ class AudioFrontendConfig:
 class PyTorchEnhancer:
     def __init__(
         self,
-        model: BaselineGRUMaskNet,
+        model: torch.nn.Module,
         frontend_cfg: Optional[AudioFrontendConfig] = None,
         device: str = "cpu",
     ) -> None:
@@ -182,7 +182,7 @@ def _derive_output_path(mic_path: Path, input_root: Path, output_dir: Path) -> P
 def run_enhancement(
     input_path: Path,
     output_dir: Path,
-    model: BaselineGRUMaskNet,
+    model: torch.nn.Module,
     device: str = "cpu",
     sampling_rate: int = 16_000,
     farend_dir: Optional[Path] = None,
@@ -234,6 +234,13 @@ def main() -> None:
         help="Suffix (without .wav) used to locate far-end files from mic file names.",
     )
     parser.add_argument("--checkpoint", type=str, default=None, help="Optional PyTorch checkpoint to load.")
+    parser.add_argument(
+        "--model-type",
+        type=str,
+        default="gru",
+        choices=["gru", "encoder_decoder"],
+        help="Model architecture. If checkpoint contains model_type metadata, it takes precedence.",
+    )
     parser.add_argument("--seed", type=int, default=0, help="Seed used for deterministic eval setup.")
     args = parser.parse_args()
 
@@ -243,18 +250,26 @@ def main() -> None:
         torch.cuda.manual_seed_all(args.seed)
     torch.use_deterministic_algorithms(True)
 
-    model = BaselineGRUMaskNet()
+    model_type = args.model_type
+    state = None
     if args.checkpoint:
         ckpt_path = Path(args.checkpoint)
         if not ckpt_path.exists():
             raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
         state = torch.load(str(ckpt_path), map_location="cpu")
+        if isinstance(state, dict) and state.get("model_type") in {"gru", "encoder_decoder"}:
+            model_type = str(state["model_type"])
+            print(f"[enhance] checkpoint model_type='{model_type}'")
+    model = create_mask_model(model_type)
+
+    if args.checkpoint:
+        assert state is not None
         if isinstance(state, dict) and "state_dict" in state:
             state = state["state_dict"]
         model.load_state_dict(state, strict=False)
         print(f"[enhance] loaded checkpoint: {ckpt_path}")
     else:
-        print("[enhance] no checkpoint provided; using randomly initialized PyTorch baseline model.")
+        print(f"[enhance] no checkpoint provided; using randomly initialized model_type='{model_type}'.")
 
     run_enhancement(
         input_path=Path(args.input),

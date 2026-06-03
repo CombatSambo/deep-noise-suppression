@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -78,7 +79,29 @@ class _WeightedAudioPool:
         datasets_cfg: Mapping[str, Mapping[str, Any]],
         file_extensions: Sequence[str],
         recursive: bool,
+        dataset_split: Optional[str] = None,
+        split_ratios: Optional[Mapping[str, float]] = None,
+        split_seed: int = 0,
     ) -> None:
+        if dataset_split is not None and dataset_split not in {"train", "val", "test"}:
+            raise ValueError("dataset_split must be one of: train, val, test, or None.")
+
+        split_thresholds = None
+        if dataset_split is not None:
+            if split_ratios is None:
+                split_ratios = {"train": 0.8, "val": 0.1, "test": 0.1}
+            train_ratio = float(split_ratios.get("train", 0.0))
+            val_ratio = float(split_ratios.get("val", 0.0))
+            test_ratio = float(split_ratios.get("test", 0.0))
+            if train_ratio < 0 or val_ratio < 0 or test_ratio < 0:
+                raise ValueError("Split ratios must be non-negative.")
+            ratio_sum = train_ratio + val_ratio + test_ratio
+            if ratio_sum <= 0:
+                raise ValueError("At least one split ratio must be > 0.")
+            train_ratio /= ratio_sum
+            val_ratio /= ratio_sum
+            split_thresholds = (train_ratio, train_ratio + val_ratio)
+
         groups: List[_AudioGroup] = []
         normalized_exts = tuple(ext.lower() if ext.startswith(".") else f".{ext.lower()}" for ext in file_extensions)
 
@@ -96,13 +119,28 @@ class _WeightedAudioPool:
                 for ext in normalized_exts:
                     files.extend(dataset_dir.glob(f"*{ext}"))
             files = sorted(p for p in files if p.is_file())
+            if dataset_split is not None:
+                if split_thresholds is None:
+                    raise RuntimeError("Internal split thresholds are not initialized.")
+                files = [
+                    p
+                    for p in files
+                    if _assign_split_for_path(
+                        path=p,
+                        train_threshold=split_thresholds[0],
+                        val_threshold=split_thresholds[1],
+                        split_seed=split_seed,
+                    )
+                    == dataset_split
+                ]
 
             if not files:
-                raise ValueError(f"Dataset '{dataset_name}' has no audio files in '{dataset_dir}'.")
+                continue
             groups.append(_AudioGroup(name=dataset_name, files=tuple(files), weight=weight))
 
         if not groups:
-            raise ValueError("No non-empty audio datasets were found.")
+            split_msg = f" for split '{dataset_split}'" if dataset_split is not None else ""
+            raise ValueError(f"No non-empty audio datasets were found{split_msg}.")
 
         self.groups = groups
         weights = np.asarray([g.weight for g in groups], dtype=np.float64)
@@ -116,6 +154,24 @@ class _WeightedAudioPool:
 
     def total_files(self) -> int:
         return int(sum(len(group.files) for group in self.groups))
+
+
+def _assign_split_for_path(
+    path: Path,
+    train_threshold: float,
+    val_threshold: float,
+    split_seed: int,
+) -> str:
+    token = f"{split_seed}:{path.as_posix()}".encode("utf-8")
+    digest = hashlib.sha1(token).digest()
+    # Convert first 8 bytes to deterministic [0, 1) float.
+    x = int.from_bytes(digest[:8], "big")
+    u = x / float(1 << 64)
+    if u < train_threshold:
+        return "train"
+    if u < val_threshold:
+        return "val"
+    return "test"
 
 
 class SpeechNoiseDataset(Dataset):
@@ -139,6 +195,9 @@ class SpeechNoiseDataset(Dataset):
         random_gain_db_range: Optional[Tuple[float, float]] = (-6.0, 6.0),
         target_level_db: Optional[float] = None,
         clip_protection: bool = True,
+        dataset_split: Optional[str] = None,
+        split_ratios: Optional[Mapping[str, float]] = None,
+        split_seed: int = 0,
     ) -> None:
         if segment_seconds <= 0:
             raise ValueError("segment_seconds must be > 0")
@@ -163,11 +222,17 @@ class SpeechNoiseDataset(Dataset):
             datasets_cfg=clean_datasets_cfg,
             file_extensions=file_extensions,
             recursive=recursive,
+            dataset_split=dataset_split,
+            split_ratios=split_ratios,
+            split_seed=split_seed,
         )
         self.noise_pool = _WeightedAudioPool(
             datasets_cfg=noise_datasets_cfg,
             file_extensions=file_extensions,
             recursive=recursive,
+            dataset_split=dataset_split,
+            split_ratios=split_ratios,
+            split_seed=split_seed,
         )
 
     def __len__(self) -> int:
@@ -258,6 +323,7 @@ def _parse_range(cfg: Mapping[str, Any], key: str, default: Tuple[float, float])
 def build_train_dataset_from_config_dict(
     cfg: Mapping[str, Any],
     seed: Optional[int] = None,
+    dataset_split: Optional[str] = None,
 ) -> SpeechNoiseDataset:
     train_data_cfg = cfg.get("train_data", {})
 
@@ -279,6 +345,18 @@ def build_train_dataset_from_config_dict(
         )
 
     file_extensions = tuple(train_data_cfg.get("file_extensions", [".wav", ".flac"]))
+    split_cfg = train_data_cfg.get("split", {})
+    if split_cfg and bool(split_cfg.get("enabled", False)):
+        split_ratios: Optional[Dict[str, float]] = {
+            "train": float(split_cfg.get("train_ratio", 0.8)),
+            "val": float(split_cfg.get("val_ratio", 0.1)),
+            "test": float(split_cfg.get("test_ratio", 0.1)),
+        }
+        split_seed = int(split_cfg.get("seed", 0))
+    else:
+        split_ratios = None
+        split_seed = 0
+        dataset_split = None
 
     return SpeechNoiseDataset(
         clean_datasets_cfg=cfg["onlinesynth_nearend_datasets"],
@@ -295,13 +373,20 @@ def build_train_dataset_from_config_dict(
         random_gain_db_range=random_gain_db_range,
         target_level_db=cfg.get("onlinesynth_nearend_normalize_volume"),
         clip_protection=bool(train_data_cfg.get("clip_protection", True)),
+        dataset_split=dataset_split,
+        split_ratios=split_ratios,
+        split_seed=split_seed,
     )
 
 
-def build_train_dataset_from_config_path(config_path: str, seed: Optional[int] = None) -> SpeechNoiseDataset:
+def build_train_dataset_from_config_path(
+    config_path: str,
+    seed: Optional[int] = None,
+    dataset_split: Optional[str] = None,
+) -> SpeechNoiseDataset:
     with open(config_path, "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
-    return build_train_dataset_from_config_dict(cfg, seed=seed)
+    return build_train_dataset_from_config_dict(cfg, seed=seed, dataset_split=dataset_split)
 
 
 def build_train_dataloader(
